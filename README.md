@@ -66,7 +66,8 @@ describe which lighting paths run and the remaining rendering issues.
 
 | Switch | What it does |
 |---|---|
-| `--console series-s` | The Series S profile: 1080p output, about 5 ms faster, a softer picture |
+| `--console series-s` | The Series S profile: 1080p output, about 5 ms faster, a softer picture (`scripts\play.ps1 -SeriesS`) |
+| `VICTORY_DUALSENSE` | PS5 DualSense and DualSense Edge pads are read straight from HID (USB or Bluetooth, rumble included) and take the pad slots XInput leaves empty; on by default. `0` turns it off, for when Steam Input or DS4Windows already makes them XInput pads and each would be seen twice |
 | `VICTORY_OUTPUT=1920x1080` | The title renders to that output size itself (Series X profile; about 16 ms less card time) |
 | `VICTORY_FRAME_INTERVAL_MS=16.667` | Lets the title go above 30 fps (menus and videos reach 60; the game's clock stays right) |
 | `VICTORY_AMBIENT_SETTLE` | How fast light settles after walking indoors (on by default, `250,3`; `0` turns it off) |

@@ -21,6 +21,8 @@ use super::xasync::{E_INVALIDARG, E_NOTIMPL};
 use super::xgameruntime::{HRESULT, S_OK};
 use crate::{HleExport, HleModule};
 
+mod dualsense;
+
 /// The documented errors.
 pub const DEVICE_DISCONNECTED: HRESULT = 0x838A_0001_u32 as i32;
 pub const DEVICE_NOT_FOUND: HRESULT = 0x838A_0002_u32 as i32;
@@ -1298,7 +1300,8 @@ pub(crate) fn module() -> HleModule {
     }
 }
 
-/// Host input: XInput pads, the keyboard while our process has focus.
+/// Host input: XInput pads, then DualSense pads (`dualsense`) in the slots
+/// left, the keyboard while our process has focus.
 #[cfg(windows)]
 mod host {
     use std::time::{Duration, Instant};
@@ -1370,9 +1373,31 @@ mod host {
         mouse_last_poll: Option<Instant>,
         mouse_look: MouseLook,
         mouse_buttons: MouseButtons,
+        /// PS5 pads, in the slots XInput leaves empty.
+        dualsense: super::dualsense::Pads,
     }
 
     impl Host {
+        fn xinput(&mut self, slot: usize) -> Option<PadState> {
+            if self.empty_until[slot].is_some_and(|until| Instant::now() < until) {
+                return None;
+            }
+            let mut state = XINPUT_STATE::default();
+            // SAFETY: room for the state.
+            if unsafe { XInputGetState(slot as u32, &mut state) } != 0 {
+                self.empty_until[slot] = Some(Instant::now() + EMPTY_SLOT_RECHECK);
+                return None;
+            }
+            self.empty_until[slot] = None;
+            Some(convert(&state.Gamepad))
+        }
+
+        /// Which DualSense the empty XInput slot `slot` stands for: the
+        /// slots are asked about in order, so those below are up to date.
+        fn dualsense_index(&self, slot: usize) -> usize {
+            self.empty_until[..slot].iter().filter(|until| until.is_some()).count()
+        }
+
         fn set_mouse_locked(&mut self, locked: bool, hwnd: Option<HWND>) {
             if self.mouse_locked == locked {
                 return;
@@ -1406,18 +1431,14 @@ mod host {
 
     impl Source for Host {
         fn pad(&mut self, slot: usize) -> Option<PadState> {
-            if self.empty_until[slot].is_some_and(|until| Instant::now() < until) {
-                return None;
-            }
-            let mut state = XINPUT_STATE::default();
-            // SAFETY: room for the state.
-            if unsafe { XInputGetState(slot as u32, &mut state) } != 0 {
-                self.empty_until[slot] = Some(Instant::now() + EMPTY_SLOT_RECHECK);
-                return None;
-            }
-            self.empty_until[slot] = None;
             #[allow(unused_mut)]
-            let mut pad = convert(&state.Gamepad);
+            let mut pad = match self.xinput(slot) {
+                Some(pad) => pad,
+                None => {
+                    let index = self.dualsense_index(slot);
+                    self.dualsense.pad(index)?
+                }
+            };
             // The scripted keys (`VICTORY_KEYS`) also press the first
             // pad's buttons, by the stand-in pad's table: with a real pad
             // connected the stand-in is not there, and a title that listens
@@ -1461,6 +1482,11 @@ mod host {
         }
 
         fn rumble(&mut self, slot: usize, low: u16, high: u16) {
+            if self.empty_until[slot].is_some() {
+                let index = self.dualsense_index(slot);
+                self.dualsense.rumble(index, low, high);
+                return;
+            }
             let speeds = XINPUT_VIBRATION {
                 wLeftMotorSpeed: low,
                 wRightMotorSpeed: high,
